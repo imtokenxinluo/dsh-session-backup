@@ -1,0 +1,22 @@
+{
+  "name": "dsh-session-backup",
+  "version": "0.1.0",
+  "description": "Cold backup for DeepSeek Harness session histories: full + incremental backup with sha256 manifest and loader-mirror pre-validation, plus verified restore. 会话历史冷备份工具。",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/backup.js",
+  "exports": {
+    ".": { "default": "./src/backup.js" },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-session-backup": "./bin/dsh-session-backup.js"
+  },
+  "files": ["src", "bin", "README.md", "LICENSE", "SPEC.md"],
+  "scripts": {
+    "test": "node --test",
+    "verify:real": "node scripts/verify-real.mjs"
+  },
+  "engines": { "node": ">=22" },
+  "keywords": ["deepseek-harness", "dsh", "session", "backup", "restore", "cold-backup"]
+}
