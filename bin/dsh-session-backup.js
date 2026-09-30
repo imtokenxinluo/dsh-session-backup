@@ -11,6 +11,20 @@
 // archive/unarchive = park old sessions elsewhere and bring them back.
 import { backupSessionRoot, restoreFromManifest, readManifest } from '../src/backup.js'
 import { archiveSessions, unarchiveSessions, listArchive } from '../src/archive.js'
+import { workspaceStatePath, readArchivedSessions, restoreArchivedSessions, findArchivedSessions } from '../src/dsh-archive.js'
+import net from 'node:net'
+
+/** Best-effort check: is something listening on the harness web port? */
+function portOpen(port = 3080, host = '127.0.0.1', timeout = 400) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host })
+    const finish = (open) => { try { socket.destroy() } catch { /* ignore */ } resolve(open) }
+    socket.setTimeout(timeout)
+    socket.on('connect', () => finish(true))
+    socket.on('timeout', () => finish(false))
+    socket.on('error', () => finish(false))
+  })
+}
 
 const UNITS = { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }
 
@@ -78,6 +92,18 @@ usage:
 
   dsh-session-backup archives <archive-dir>
       List archived sessions (id / workspace / size / archived time / title).
+
+  dsh-session-backup archived <dsh-home>
+      List sessions the HARNESS archived (workspace.json → archivedSessionIds).
+      These are hidden from the UI but their artifacts are usually still on
+      disk. Shows whether each session's file still exists.
+
+  dsh-session-backup restore-archived <dsh-home> (--ids a,b | --all) [--apply]
+      Un-hide harness-archived sessions by removing them from the registry's
+      archive set. Dry-run by default; --apply writes a timestamped backup of
+      workspace.json first, then swaps the file atomically.
+      ⚠️ Run this with DSH STOPPED: the registry keeps an in-memory snapshot and
+      would overwrite an external edit on its next write.
 `)
 }
 
@@ -164,6 +190,51 @@ async function main() {
         console.log(`  ${r.id.padEnd(38)} ${(r.workspace || '—').padEnd(34)} ${mb(r.size).padStart(10)}  ${stamp(r.archivedAt)}  ${r.title || ''}`)
       }
       console.log(`\ntotal: ${rows.length}`)
+      return
+    }
+    case 'archived': {
+      const [dshHome] = rest
+      if (!dshHome) return usage()
+      const stateFile = workspaceStatePath(dshHome)
+      const ids = await readArchivedSessions(stateFile)
+      if (!ids.length) { console.log(`no harness-archived sessions in ${stateFile}`); return }
+      const rows = await findArchivedSessions(dshHome, ids, { withTitle: true })
+      console.log(`harness-archived sessions: ${rows.length}\n`)
+      console.log(`  ${'id'.padEnd(46)} ${'file'.padEnd(9)} ${'size'.padStart(10)}  title`)
+      for (const r of rows) {
+        console.log(`  ${r.id.padEnd(46)} ${(r.present ? 'present' : 'MISSING').padEnd(9)} ${mb(r.size).padStart(10)}  ${r.title || '—'}`)
+      }
+      const missing = rows.filter((r) => !r.present).length
+      console.log(`\narchived set: ${stateFile}`)
+      if (missing) console.log(`⚠️ ${missing} session(s) have no artifact on disk — restore those files first (see 'archives'/'unarchive').`)
+      return
+    }
+    case 'restore-archived': {
+      const { flags, positional } = parseFlags(rest)
+      const [dshHome] = positional
+      if (!dshHome) return usage()
+      const stateFile = workspaceStatePath(dshHome)
+      const ids = typeof flags.ids === 'string' ? flags.ids.split(',').filter(Boolean) : undefined
+      const all = flags.all === true
+      const apply = flags.apply === true
+      const before = await readArchivedSessions(stateFile)
+      if (!before.length) { console.log(`nothing archived in ${stateFile}`); return }
+
+      const r = await restoreArchivedSessions(stateFile, { ids, all, apply })
+      const mode = apply ? 'apply' : 'dry-run'
+      console.log(`restore-archived (${mode}): ${r.wouldRestore.length} of ${r.archivedBefore} archived session(s)`)
+      for (const id of r.wouldRestore) console.log(`  ${id}`)
+      if (r.unknown?.length) console.log(`  not in archive set (ignored): ${r.unknown.join(', ')}`)
+      if (!apply) {
+        console.log('\nnothing was written (dry-run). re-run with --apply to un-hide these sessions.')
+        return
+      }
+      if (await portOpen()) {
+        console.log('\n⚠️  something is listening on 127.0.0.1:3080 — DSH may still be running.')
+        console.log('    The registry holds an in-memory snapshot; restart DSH before relying on this change.')
+      }
+      if (r.backup) console.log(`\nbackup: ${r.backup}`)
+      console.log(`un-hid ${r.restored.length} session(s). restart DSH for the list to refresh.`)
       return
     }
     default:

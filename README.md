@@ -87,6 +87,43 @@ node bin/dsh-session-backup.js archive D:/tool/dsh_data/sessions D:/session-arch
     └── session.jsonl.zstd
 ```
 
+## ⚠️ 两种"归档"是不同的东西
+
+| | **DSH 原生归档**（harness 隐藏） | **本工具的归档**（文件级） |
+|---|---|---|
+| 触发 | GUI 会话菜单 →「归档会话」（`workspace.archiveSession`） | `archive` 子命令 |
+| 做了什么 | 把 session id 记进 `storages/workspace.json` → `global.archivedSessionIds`；**文件一动不动**，会计槽位保留 | 把会话目录**移出** sessions 根到归档目录 |
+| 效果 | 会话在所有列表/搜索里**消失**，但磁盘上还在 | 会话文件真的挪走了，活跃库变小 |
+| 官方还原入口 | ❌ **没有**（接口只有 `archiveSession` + 只读 getter，注释写着 "a future unarchive"） | ✅ `unarchive`（本工具） |
+| 本工具提供 | ✅ `archived` 列出 + `restore-archived` 还原 | ✅ `archive` / `unarchive` |
+
+## 还原 DSH 原生归档的会话
+
+```bash
+# 1. 看看被 harness 归档了哪些（含从首条用户消息提取的标题、文件是否还在）
+node bin/dsh-session-backup.js archived <dsh-home>
+#   例：node bin/dsh-session-backup.js archived D:/tool/dsh_data
+
+# 2. dry-run：确认会还原哪些
+node bin/dsh-session-backup.js restore-archived <dsh-home> --ids <id1>,<id2>
+
+# 3. 真正执行（先自动备份 workspace.json，再原子替换）
+node bin/dsh-session-backup.js restore-archived <dsh-home> --ids <id1>,<id2> --apply
+node bin/dsh-session-backup.js restore-archived <dsh-home> --all --apply     # 全部还原
+```
+
+> 🔴 **必须在 DSH 停止时执行**：workspace registry 常驻内存快照，运行中改文件会在它下次
+> 写入时被覆盖。命令会检测 `127.0.0.1:3080` 并在疑似仍在运行时警告。
+> 执行后会写入 `workspace.json.bak-<时间戳>` 备份，改动是原子替换。
+
+**只还原标记还不够的情况**：如果归档会话的文件也被移走了（`archived` 列表里显示
+`MISSING`），需要先做文件级还原：
+
+```bash
+node bin/dsh-session-backup.js archives <archive-dir>
+node bin/dsh-session-backup.js unarchive <archive-dir> <sessions-root> --ids <id>
+```
+
 ## 测试
 
 ```bash
